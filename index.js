@@ -12,8 +12,8 @@ app.use(express.json());
 // ─── قاعدة البيانات ───────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway') 
-    ? false 
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway')
+    ? false
     : { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30000,
@@ -33,7 +33,6 @@ async function runMigrations() {
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS users (
         id              SERIAL PRIMARY KEY,
         phone           VARCHAR(20) UNIQUE NOT NULL,
@@ -42,7 +41,6 @@ async function runMigrations() {
         is_active       BOOLEAN DEFAULT true,
         created_at      TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS drivers (
         id             SERIAL PRIMARY KEY,
         phone          VARCHAR(20) UNIQUE NOT NULL,
@@ -58,7 +56,6 @@ async function runMigrations() {
         is_active      BOOLEAN DEFAULT true,
         created_at     TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS wallets (
         id          SERIAL PRIMARY KEY,
         driver_id   INTEGER UNIQUE REFERENCES drivers(id) ON DELETE CASCADE,
@@ -66,7 +63,6 @@ async function runMigrations() {
         balance     INTEGER DEFAULT 0,
         updated_at  TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS trips (
         id              SERIAL PRIMARY KEY,
         user_id         INTEGER REFERENCES users(id),
@@ -89,7 +85,6 @@ async function runMigrations() {
         completed_at    TIMESTAMPTZ,
         created_at      TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS transactions (
         id            SERIAL PRIMARY KEY,
         driver_id     INTEGER REFERENCES drivers(id),
@@ -100,7 +95,6 @@ async function runMigrations() {
         balance_after INTEGER NOT NULL,
         created_at    TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS gps_logs (
         id        SERIAL PRIMARY KEY,
         driver_id INTEGER REFERENCES drivers(id),
@@ -108,7 +102,6 @@ async function runMigrations() {
         lng       NUMERIC(10,7) NOT NULL,
         timestamp TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS disputes (
         id          SERIAL PRIMARY KEY,
         trip_id     INTEGER REFERENCES trips(id),
@@ -119,7 +112,6 @@ async function runMigrations() {
         resolved_by INTEGER,
         created_at  TIMESTAMPTZ DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS promo_codes (
         id         SERIAL PRIMARY KEY,
         code       VARCHAR(50) UNIQUE NOT NULL,
@@ -133,7 +125,6 @@ async function runMigrations() {
       );
     `);
 
-    // إضافة بيانات تجريبية إذا كانت الجداول فارغة
     const zonesCount = await client.query('SELECT COUNT(*) FROM zones');
     if (parseInt(zonesCount.rows[0].count) === 0) {
       await client.query(`
@@ -144,9 +135,8 @@ async function runMigrations() {
           ('شط العرب', 'البصرة'),
           ('القرنة', 'البصرة');
       `);
-      console.log('✅ تم إضافة المناطق التجريبية');
+      console.log('✅ تم إضافة المناطق');
     }
-
     console.log('✅ تم إنشاء الجداول بنجاح');
   } catch (err) {
     console.error('❌ خطأ في إنشاء الجداول:', err.message);
@@ -172,6 +162,30 @@ const handleError = (res, err, message = 'خطأ في الخادم') => {
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 const isValidIraqiPhone = (phone) => /^\+9647[0-9]{9}$/.test(phone);
 
+// حساب السعر — RULE_1 to RULE_1d
+function calculatePrice(distanceKm, isCovered = false) {
+  const rounded = Math.round(distanceKm * 2) / 2;
+  let price = 500 + (rounded * 500);
+  if (isCovered) price += 500;
+  const hour = new Date().getHours();
+  let surgeAmount = 0, surgeLabel = null;
+  if (hour >= 0 && hour < 6)
+    { surgeAmount = 500; surgeLabel = 'ليل'; }
+  else if ((hour >= 6 && hour < 10) || (hour >= 16 && hour < 20))
+    { surgeAmount = 250; surgeLabel = 'ذروة'; }
+  price += surgeAmount;
+  return {
+    distance_km:   rounded,
+    base_price:    500 + (rounded * 500),
+    covered_extra: isCovered ? 500 : 0,
+    surge_amount:  surgeAmount,
+    surge_type:    surgeLabel,
+    total_price:   price,
+    commission:    250,
+    driver_net:    price - 250
+  };
+}
+
 // ─── JWT Middleware ───────────────────────────────────────
 const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -191,11 +205,17 @@ const driverOnly = (req, res, next) => {
   next();
 };
 
+const userOnly = (req, res, next) => {
+  if (req.user.type !== 'user')
+    return res.status(403).json({ success: false, error: 'للزبائن فقط' });
+  next();
+};
+
 // ══════════════════════════════════════════════════════════
-// 🏠 HEALTH CHECK
+// 🏠 HEALTH
 // ══════════════════════════════════════════════════════════
 app.get('/', (req, res) => {
-  res.json({ success: true, message: 'تكتك سيرفر يعمل 🛺', version: '2.0.0' });
+  res.json({ success: true, message: 'تكتك سيرفر يعمل 🛺', version: '3.0.0' });
 });
 
 app.get('/health', async (req, res) => {
@@ -208,7 +228,7 @@ app.get('/health', async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
-// 🔐 AUTH
+// 🔐 AUTH — PART 2
 // ══════════════════════════════════════════════════════════
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
@@ -257,7 +277,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     const userResult   = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
 
     let userId, userType, userData;
-
     if (driverResult.rowCount > 0) {
       userData = driverResult.rows[0]; userId = userData.id; userType = 'driver';
     } else if (userResult.rowCount > 0) {
@@ -268,7 +287,6 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     }
 
     const token = jwt.sign({ id: userId, phone, type: userType }, process.env.JWT_SECRET, { expiresIn: '30d' });
-
     res.json({ success: true, token, user_type: userType, user: { id: userData.id, phone: userData.phone, name: userData.name || null } });
   } catch (err) {
     handleError(res, err, 'فشل التحقق من OTP');
@@ -297,7 +315,6 @@ app.post('/api/auth/register-driver', async (req, res) => {
     `, [phone, name, vehicle_type, plate, zone_id || 1, walletId]);
 
     await pool.query('INSERT INTO wallets (driver_id, wallet_code, balance) VALUES ($1, $2, 0)', [driver.rows[0].id, walletId]);
-
     res.status(201).json({ success: true, message: 'تم تسجيل السائق، انتظر موافقة الإدارة', driver: driver.rows[0] });
   } catch (err) {
     handleError(res, err, 'فشل تسجيل السائق');
@@ -322,88 +339,189 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════
-// 🗺️ ZONES
+// 🚗 TRIPS — PART 3: محرك الرحلات
 // ══════════════════════════════════════════════════════════
-app.get('/api/zones', async (req, res) => {
+
+// 1. إنشاء رحلة جديدة (الزبون)
+app.post('/api/trips', authMiddleware, userOnly, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM zones WHERE is_active = true ORDER BY name ASC');
-    res.json({ success: true, data: result.rows, count: result.rowCount });
+    const { pickup_lat, pickup_lng, pickup_addr, dropoff_lat, dropoff_lng, dropoff_addr, distance_km, vehicle_type, payment_method } = req.body;
+
+    if (!pickup_lat || !pickup_lng || !dropoff_lat || !dropoff_lng || !distance_km)
+      return res.status(400).json({ success: false, error: 'أرسل بيانات الموقع والمسافة' });
+
+    // RULE_10: فحص أن الموقع داخل البصرة (تقريباً)
+    const basraLat = { min: 29.9, max: 31.2 };
+    const basraLng = { min: 47.0, max: 48.0 };
+    if (pickup_lat < basraLat.min || pickup_lat > basraLat.max ||
+        pickup_lng < basraLng.min || pickup_lng > basraLng.max) {
+      return res.status(400).json({ success: false, error: 'الخدمة متاحة داخل البصرة فقط' });
+    }
+
+    const isCovered = vehicle_type === 'تكتك مسقوف';
+    const priceData = calculatePrice(parseFloat(distance_km), isCovered);
+
+    // RULE_11: أول رحلة للزبون مجانية
+    const user = await pool.query('SELECT first_ride_used FROM users WHERE id = $1', [req.user.id]);
+    let finalPrice = priceData.total_price;
+    let isFreeRide = false;
+    if (!user.rows[0].first_ride_used) {
+      finalPrice = 0;
+      isFreeRide = true;
+    }
+
+    const trip = await pool.query(`
+      INSERT INTO trips (
+        user_id, status, payment_method,
+        pickup_lat, pickup_lng, pickup_addr,
+        dropoff_lat, dropoff_lng, dropoff_addr,
+        distance_km, vehicle_type, price, commission, driver_net, surge_type
+      ) VALUES ($1, 'searching', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      req.user.id, payment_method || 'cash',
+      pickup_lat, pickup_lng, pickup_addr || '',
+      dropoff_lat, dropoff_lng, dropoff_addr || '',
+      priceData.distance_km,
+      vehicle_type || 'تكتك مكشوف',
+      isFreeRide ? 0 : priceData.total_price,
+      isFreeRide ? 0 : priceData.commission,
+      isFreeRide ? 0 : priceData.driver_net,
+      priceData.surge_type
+    ]);
+
+    res.status(201).json({
+      success:    true,
+      trip:       trip.rows[0],
+      price_info: priceData,
+      is_free:    isFreeRide,
+      message:    isFreeRide ? '🎉 رحلتك الأولى مجانية!' : 'تم إنشاء الرحلة، نبحث عن سائق...'
+    });
   } catch (err) {
-    handleError(res, err, 'خطأ في جلب المناطق');
+    handleError(res, err, 'فشل إنشاء الرحلة');
   }
 });
 
-// ══════════════════════════════════════════════════════════
-// 🚗 DRIVERS
-// ══════════════════════════════════════════════════════════
-app.get('/api/drivers/available', async (req, res) => {
+// 2. جلب تفاصيل رحلة
+app.get('/api/trips/:id', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT id, name, vehicle_type, rating, zone_id
-      FROM drivers WHERE status = 'online' AND is_active = true
-      ORDER BY rating DESC
-    `);
-    res.json({ success: true, data: result.rows, count: result.rowCount });
+      SELECT t.*, 
+        u.name as user_name, u.phone as user_phone,
+        d.name as driver_name, d.phone as driver_phone, d.vehicle_type, d.plate, d.rating as driver_rating
+      FROM trips t
+      LEFT JOIN users u ON u.id = t.user_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      WHERE t.id = $1
+    `, [req.params.id]);
+
+    if (result.rowCount === 0)
+      return res.status(404).json({ success: false, error: 'الرحلة غير موجودة' });
+
+    res.json({ success: true, data: result.rows[0] });
   } catch (err) {
-    handleError(res, err, 'خطأ في جلب السائقين');
+    handleError(res, err, 'فشل جلب الرحلة');
   }
 });
 
-// ══════════════════════════════════════════════════════════
-// 💰 PRICE CALCULATOR
-// ══════════════════════════════════════════════════════════
-function calculatePrice(distanceKm, isCovered = false) {
-  const rounded = Math.round(distanceKm * 2) / 2;
-  let price = 500 + (rounded * 500);
-  if (isCovered) price += 500;
-  const hour = new Date().getHours();
-  let surgeAmount = 0, surgeLabel = null;
-  if (hour >= 0 && hour < 6) { surgeAmount = 500; surgeLabel = 'ليل'; }
-  else if ((hour >= 6 && hour < 10) || (hour >= 16 && hour < 20)) { surgeAmount = 250; surgeLabel = 'ذروة'; }
-  price += surgeAmount;
-  return { distance_km: rounded, base_price: 500 + (rounded * 500), covered_extra: isCovered ? 500 : 0, surge_amount: surgeAmount, surge_type: surgeLabel, total_price: price, commission: 250, driver_net: price - 250 };
-}
-
-app.post('/api/price/calculate', (req, res) => {
+// 3. السائق يقبل الرحلة — RULE_2
+app.post('/api/trips/:id/accept', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const { distance_km, is_covered } = req.body;
-    if (!distance_km || isNaN(distance_km) || distance_km <= 0)
-      return res.status(400).json({ success: false, error: 'أرسل distance_km صحيحة' });
-    res.json({ success: true, data: calculatePrice(parseFloat(distance_km), !!is_covered) });
+    const trip = await pool.query('SELECT * FROM trips WHERE id = $1', [req.params.id]);
+    if (trip.rowCount === 0)
+      return res.status(404).json({ success: false, error: 'الرحلة غير موجودة' });
+    if (trip.rows[0].status !== 'searching')
+      return res.status(400).json({ success: false, error: 'الرحلة غير متاحة للقبول' });
+
+    // فحص رصيد السائق — RULE_5
+    const wallet = await pool.query('SELECT balance FROM wallets WHERE driver_id = $1', [req.user.id]);
+    const balance = wallet.rows[0]?.balance || 0;
+    if (balance + 250 < 0 && trip.rows[0].price > 0) {
+      return res.status(400).json({ success: false, error: 'رصيدك غير كافٍ، يرجى شحن المحفظة' });
+    }
+
+    const updated = await pool.query(`
+      UPDATE trips SET status = 'accepted', driver_id = $1
+      WHERE id = $2 AND status = 'searching'
+      RETURNING *
+    `, [req.user.id, req.params.id]);
+
+    if (updated.rowCount === 0)
+      return res.status(400).json({ success: false, error: 'تم قبول الرحلة من سائق آخر' });
+
+    res.json({ success: true, message: 'تم قبول الرحلة', trip: updated.rows[0] });
   } catch (err) {
-    handleError(res, err, 'خطأ في حساب السعر');
+    handleError(res, err, 'فشل قبول الرحلة');
   }
 });
 
-// ══════════════════════════════════════════════════════════
-// 📊 STATS
-// ══════════════════════════════════════════════════════════
-app.get('/api/stats', async (req, res) => {
+// 4. بدء الرحلة
+app.post('/api/trips/:id/start', authMiddleware, driverOnly, async (req, res) => {
   try {
-    const [drivers, trips, zones, earnings] = await Promise.all([
-      pool.query('SELECT COUNT(*) FROM drivers WHERE is_active = true'),
-      pool.query("SELECT COUNT(*) FROM trips WHERE status IN ('searching','accepted','ongoing')"),
-      pool.query('SELECT COUNT(*) FROM zones WHERE is_active = true'),
-      pool.query("SELECT COALESCE(SUM(commission),0) AS total FROM trips WHERE status = 'completed'"),
-    ]);
-    res.json({ success: true, data: { active_drivers: parseInt(drivers.rows[0].count), active_trips: parseInt(trips.rows[0].count), active_zones: parseInt(zones.rows[0].count), total_earnings: parseInt(earnings.rows[0].total) } });
+    const updated = await pool.query(`
+      UPDATE trips SET status = 'ongoing', started_at = NOW()
+      WHERE id = $1 AND driver_id = $2 AND status = 'accepted'
+      RETURNING *
+    `, [req.params.id, req.user.id]);
+
+    if (updated.rowCount === 0)
+      return res.status(400).json({ success: false, error: 'لا يمكن بدء هذه الرحلة' });
+
+    res.json({ success: true, message: 'بدأت الرحلة', trip: updated.rows[0] });
   } catch (err) {
-    handleError(res, err, 'خطأ في جلب الإحصائيات');
+    handleError(res, err, 'فشل بدء الرحلة');
   }
 });
 
-// ══════════════════════════════════════════════════════════
-// 🚨 404
-// ══════════════════════════════════════════════════════════
-app.use((req, res) => {
-  res.status(404).json({ success: false, error: `المسار ${req.path} غير موجود` });
-});
+// 5. إكمال الرحلة + خصم العمولة — RULE_1, RULE_3, RULE_9
+app.post('/api/trips/:id/complete', authMiddleware, driverOnly, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-// ══════════════════════════════════════════════════════════
-// 🚀 تشغيل الخادم
-// ══════════════════════════════════════════════════════════
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  console.log(`🛺 تكتك v2 يعمل على المنفذ ${PORT}`);
-  await runMigrations();
-});
+    const tripResult = await client.query('SELECT * FROM trips WHERE id = $1 AND driver_id = $2', [req.params.id, req.user.id]);
+    if (tripResult.rowCount === 0)
+      return res.status(404).json({ success: false, error: 'الرحلة غير موجودة' });
+
+    const trip = tripResult.rows[0];
+    if (trip.status !== 'ongoing')
+      return res.status(400).json({ success: false, error: 'الرحلة ليست جارية' });
+
+    // إكمال الرحلة — RULE_9: تُحفظ للأبد
+    await client.query(`
+      UPDATE trips SET status = 'completed', completed_at = NOW()
+      WHERE id = $1
+    `, [trip.id]);
+
+    // خصم العمولة من المحفظة — RULE_1
+    if (trip.commission > 0) {
+      const walletResult = await client.query('SELECT balance FROM wallets WHERE driver_id = $1', [req.user.id]);
+      const currentBalance = walletResult.rows[0]?.balance || 0;
+      const newBalance = currentBalance - trip.commission;
+
+      await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE driver_id = $2', [newBalance, req.user.id]);
+      await client.query('UPDATE drivers SET wallet_balance = $1 WHERE id = $2', [newBalance, req.user.id]);
+
+      // تسجيل المعاملة
+      await client.query(`
+        INSERT INTO transactions (driver_id, trip_id, type, amount, direction, balance_after)
+        VALUES ($1, $2, 'commission', $3, '-', $4)
+      `, [req.user.id, trip.id, trip.commission, newBalance]);
+
+      // RULE_5: رصيد سالب → إيقاف تلقائي
+      if (newBalance < 0) {
+        await client.query("UPDATE drivers SET status = 'suspended' WHERE id = $1", [req.user.id]);
+      }
+    }
+
+    // RULE_11: تحديث أول رحلة للزبون
+    await client.query('UPDATE users SET first_ride_used = true WHERE id = $1', [trip.user_id]);
+
+    await client.query('COMMIT');
+
+    // جلب الرصيد الجديد
+    const newWallet = await pool.query('SELECT balance FROM wallets WHERE driver_id = $1', [req.user.id]);
+
+    res.json({
+      success:     true,
+      message:     'تمت الرحلة بنجاح',
